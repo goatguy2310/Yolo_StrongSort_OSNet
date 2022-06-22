@@ -57,6 +57,7 @@ def run(
         save_vid=False,  # save confidences in --save-txt labels
         nosave=False,  # do not save images/videos
         classes=None,  # filter by class: --class 0, or --class 0 2 3
+        classesnotrack=None, # filter out classes that don't need to be tracked: --classesnotrack 0, or --classesnotrack 0 2 3
         agnostic_nms=False,  # class-agnostic NMS
         augment=False,  # augmented inference
         visualize=False,  # visualize features
@@ -155,11 +156,11 @@ def run(
         pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, opt.classes, opt.agnostic_nms, max_det=opt.max_det)
         dt[2] += time_sync() - t3
 
-        print(pred)
         x = pred
-        if classes is not None:
-            x = x[(x[:, 5:6] == torch.tensor(classes, device=x.device)).any(1)]
-        print(x)
+        pred = pred[0]
+        if classesnotrack is not None:
+            pred = pred[~(pred[:, 5:6] == torch.tensor(classesnotrack, device=pred.device)).any(1)]
+        pred = [pred]
 
         # Process detections
         for i, det in enumerate(pred):  # detections per image
@@ -298,6 +299,7 @@ def parse_opt():
     parser.add_argument('--nosave', action='store_true', help='do not save images/videos')
     # class 0 is person, 1 is bycicle, 2 is car... 79 is oven
     parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --classes 0, or --classes 0 2 3')
+    parser.add_argument('--classesnotrack', nargs='+', type=int, help='filter out classes that don\'t need to be tracked: --classesnotrack 0, or --classesnotrack 0 2 3')
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
     parser.add_argument('--visualize', action='store_true', help='visualize features')
