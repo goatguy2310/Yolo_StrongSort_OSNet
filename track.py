@@ -155,6 +155,12 @@ def run(
         pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, opt.classes, opt.agnostic_nms, max_det=opt.max_det)
         dt[2] += time_sync() - t3
 
+        print(pred)
+        x = pred
+        if classes is not None:
+            x = x[(x[:, 5:6] == torch.tensor(classes, device=x.device)).any(1)]
+        print(x)
+
         # Process detections
         for i, det in enumerate(pred):  # detections per image
             seen += 1
