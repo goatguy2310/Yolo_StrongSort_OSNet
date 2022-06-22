@@ -156,10 +156,12 @@ def run(
         pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, opt.classes, opt.agnostic_nms, max_det=opt.max_det)
         dt[2] += time_sync() - t3
 
-        x = pred
+        # Filtering out classes that don't need to be tracked
         pred = pred[0]
         if classesnotrack is not None:
-            pred = pred[~(pred[:, 5:6] == torch.tensor(classesnotrack, device=pred.device)).any(1)]
+            trackingclasses = ~(pred[:, 5:6] == torch.tensor(classesnotrack, device=pred.device)).any(1)
+            x = pred[~trackingclasses]
+            pred = pred[trackingclasses]
         pred = [pred]
 
         # Process detections
@@ -233,6 +235,19 @@ def run(
                         if save_vid or save_crop or show_vid:  # Add bbox to image
                             c = int(cls)  # integer class
                             id = int(id)  # integer id
+                            label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
+                                (f'{id} {conf:.2f}' if hide_class else f'{id} {names[c]} {conf:.2f}'))
+                            annotator.box_label(bboxes, label, color=colors(c, True))
+                            if save_crop:
+                                txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
+                                save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
+                
+                # draw boxes for untracked objects
+                for j, (x1, y1, x2, y2, conf, cls) in x:
+
+                        if save_vid or save_crop or show_vid:  # Add bbox to image
+                            c = int(cls)  # integer class
+                            id = -1  # integer id
                             label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
                                 (f'{id} {conf:.2f}' if hide_class else f'{id} {names[c]} {conf:.2f}'))
                             annotator.box_label(bboxes, label, color=colors(c, True))
