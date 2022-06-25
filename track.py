@@ -244,7 +244,7 @@ def run(
                 
                 # draw boxes for untracked objects
                 for j, (x1, y1, x2, y2, conf, cls) in enumerate(x):
-
+                        bboxes = xyxy2xywh([x1, y1, x2, y2])
                         if save_vid or save_crop or show_vid:  # Add bbox to image
                             c = int(cls)  # integer class
                             id = -1  # integer id
