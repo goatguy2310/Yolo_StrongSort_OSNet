@@ -243,7 +243,7 @@ def run(
                                 save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
                 
                 # draw boxes for untracked objects
-                for j, (x1, y1, x2, y2, conf, cls) in x:
+                for j, (x1, y1, x2, y2, conf, cls) in enumerate(x):
 
                         if save_vid or save_crop or show_vid:  # Add bbox to image
                             c = int(cls)  # integer class
