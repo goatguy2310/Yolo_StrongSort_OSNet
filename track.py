@@ -12,7 +12,11 @@ import sys
 import numpy as np
 from pathlib import Path
 import torch
+import torch.nn as nn
 import torch.backends.cudnn as cudnn
+
+import torchvision
+from torchvision import datasets, transforms, models
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # yolov5 strongsort root directory
@@ -44,6 +48,7 @@ def run(
         source='0',
         yolo_weights=WEIGHTS / 'yolov5m.pt',  # model.pt path(s),
         strong_sort_weights=WEIGHTS / 'osnet_x0_25_msmt17.pt',  # model.pt path,
+        classification_weights=WEIGHTS / 'elder-action-classification.pt',
         config_strongsort=ROOT / 'strong_sort/configs/strong_sort.yaml',
         imgsz=(640, 640),  # inference size (height, width)
         conf_thres=0.25,  # confidence threshold
@@ -97,6 +102,12 @@ def run(
     model = DetectMultiBackend(yolo_weights, device=device, dnn=dnn, data=None, fp16=half)
     stride, names, pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)  # check image size
+
+    # Load action classifier model
+    class_model = models.mobilenet_v2(pretrained=True)
+    class_model.classifier[-1] = nn.Linear(1280, 3)
+    class_model.load_state_dict(torch.load(classification_weights))
+    class_model.to(device).eval()
 
     # Dataloader
     if webcam:
@@ -157,12 +168,12 @@ def run(
         dt[2] += time_sync() - t3
 
         # Filtering out classes that don't need to be tracked
-        pred = pred[0]
+        x = []
         if classesnotrack is not None:
-            trackingclasses = ~(pred[:, 5:6] == torch.tensor(classesnotrack, device=pred.device)).any(1)
-            x = pred[~trackingclasses]
-            pred = pred[trackingclasses]
-        pred = [pred]
+            for i, p in enumerate(pred):
+              trackingclasses = ~(p[:, 5:6] == torch.tensor(classesnotrack, device=p.device)).any(1)
+              x.append(p[~trackingclasses])
+              pred[i] = p[trackingclasses]
 
         # Process detections
         for i, det in enumerate(pred):  # detections per image
@@ -241,25 +252,27 @@ def run(
                             if save_crop:
                                 txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
                                 save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
-                
-                # draw boxes for untracked objects
-                for j, (x1, y1, x2, y2, conf, cls) in enumerate(x):
-                        bboxes = torch.FloatTensor([x1, y1, x2, y2])
-                        if save_vid or save_crop or show_vid:  # Add bbox to image
-                            c = int(cls)  # integer class
-                            id = -1  # integer id
-                            label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
-                                (f'{id} {conf:.2f}' if hide_class else f'{id} {names[c]} {conf:.2f}'))
-                            annotator.box_label(bboxes, label, color=colors(c, True))
-                            if save_crop:
-                                txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
-                                save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
+
 
                 LOGGER.info(f'{s}Done. YOLO:({t3 - t2:.3f}s), StrongSORT:({t5 - t4:.3f}s)')
 
             else:
                 strongsort_list[i].increment_ages()
                 LOGGER.info('No detections')
+
+            if x[i] is not None and len(x[i]):
+                if save_vid or save_crop or show_vid:
+                    # draw boxes for untracked objects
+                    x[i][:, :4] = scale_coords(im.shape[2:], x[i][:, :4], im0.shape).round()
+                    for j, (x1, y1, x2, y2, conf, cls) in enumerate(x[i]):
+                        bboxes = [x1, y1, x2, y2]
+                        c = int(cls)  # integer class
+                        id = -1  # integer id
+                        label = None if hide_labels else (f'{id} {names[c]}')
+                        annotator.box_label(bboxes, label, color=colors(c, True))
+                        if save_crop:
+                            txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
+                            save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
 
             # Stream results
             im0 = annotator.result()
@@ -284,6 +297,9 @@ def run(
                 vid_writer[i].write(im0)
 
             prev_frames[i] = curr_frames[i]
+        
+        t6 = time_sync()
+        LOGGER.info(f'Total time: {t6 - t1:.3f}s')
 
     # Print results
     t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
@@ -299,6 +315,7 @@ def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--yolo-weights', nargs='+', type=str, default=WEIGHTS / 'yolov5m.pt', help='model.pt path(s)')
     parser.add_argument('--strong-sort-weights', type=str, default=WEIGHTS / 'osnet_x0_25_msmt17.pt')
+    parser.add_argument('--classification-weights', type=str, default=WEIGHTS / 'elder-action-classification.pt')
     parser.add_argument('--config-strongsort', type=str, default='strong_sort/configs/strong_sort.yaml')
     parser.add_argument('--source', type=str, default='0', help='file/dir/URL/glob, 0 for webcam')  
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
