@@ -48,7 +48,7 @@ def run(
         source='0',
         yolo_weights=WEIGHTS / 'yolov5m.pt',  # model.pt path(s),
         strong_sort_weights=WEIGHTS / 'osnet_x0_25_msmt17.pt',  # model.pt path,
-        classification_weights=WEIGHTS / 'elder-action-classification.pt',
+        classification_weights=None,
         config_strongsort=ROOT / 'strong_sort/configs/strong_sort.yaml',
         imgsz=(640, 640),  # inference size (height, width)
         conf_thres=0.25,  # confidence threshold
@@ -269,12 +269,11 @@ def run(
                     for j, (x1, y1, x2, y2, conf, cls) in enumerate(x[i]):
                         bboxes = [x1, y1, x2, y2]
                         c = int(cls)  # integer class
-                        id = -1  # integer id
-                        label = None if hide_labels else (f'{id} {names[c]}')
+                        label = None if hide_labels else (f'Object: {names[c]}')
                         annotator.box_label(bboxes, label, color=colors(c, True))
                         if save_crop:
                             txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
-                            save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
+                            save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{p.stem}.jpg', BGR=True)
 
             # Stream results
             im0 = annotator.result()
@@ -319,7 +318,7 @@ def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--yolo-weights', nargs='+', type=str, default=WEIGHTS / 'yolov5m.pt', help='model.pt path(s)')
     parser.add_argument('--strong-sort-weights', type=str, default=WEIGHTS / 'osnet_x0_25_msmt17.pt')
-    parser.add_argument('--classification-weights', type=str, default=WEIGHTS / 'elder-action-classification.pt')
+    parser.add_argument('--classification-weights', type=str, default=None)
     parser.add_argument('--config-strongsort', type=str, default='strong_sort/configs/strong_sort.yaml')
     parser.add_argument('--source', type=str, default='0', help='file/dir/URL/glob, 0 for webcam')  
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
