@@ -104,10 +104,10 @@ def run(
     imgsz = check_img_size(imgsz, s=stride)  # check image size
 
     # Load action classifier model
-    class_model = models.mobilenet_v2(pretrained=True)
-    class_model.classifier[-1] = nn.Linear(1280, 3)
-    class_model.load_state_dict(torch.load(classification_weights))
-    class_model.to(device).eval()
+    # class_model = models.mobilenet_v2(pretrained=True)
+    # class_model.classifier[-1] = nn.Linear(1280, 3)
+    # class_model.load_state_dict(torch.load(classification_weights))
+    # class_model.to(device).eval()
 
     # Dataloader
     if webcam:
@@ -145,9 +145,11 @@ def run(
 
     # Run tracking
     model.warmup(imgsz=(1 if pt else nr_sources, 3, *imgsz))  # warmup
-    dt, seen = [0.0, 0.0, 0.0, 0.0], 0
+    dt, seen, frame_cnt = [0.0, 0.0, 0.0, 0.0], 0, 0
+    start_time = time_sync()
     curr_frames, prev_frames = [None] * nr_sources, [None] * nr_sources
     for frame_idx, (path, im, im0s, vid_cap, s) in enumerate(dataset):
+        frame_cnt += 1
         t1 = time_sync()
         im = torch.from_numpy(im).to(device)
         im = im.half() if half else im.float()  # uint8 to fp16/32
@@ -299,11 +301,13 @@ def run(
             prev_frames[i] = curr_frames[i]
         
         t6 = time_sync()
-        LOGGER.info(f'Total time: {t6 - t1:.3f}s')
+        LOGGER.info(f'Total time: {t6 - t1:.3f}s, {(1 / (t6 - t1)):.3f} fps')
 
     # Print results
     t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
+    avg = (time_sync() - start_time) / frame_cnt # average time per frame
     LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS, %.1fms strong sort update per image at shape {(1, 3, *imgsz)}' % t)
+    LOGGER.info(f'Average time: {avg:.3f}s, {(1 / avg):.3f} fps')
     if save_txt or save_vid:
         s = f"\n{len(list(save_dir.glob('tracks/*.txt')))} tracks saved to {save_dir / 'tracks'}" if save_txt else ''
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
