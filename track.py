@@ -262,7 +262,7 @@ def run(
                 strongsort_list[i].increment_ages()
                 LOGGER.info('No detections')
 
-            if x[i] is not None and len(x[i]):
+            if len(x) > 0 and x[i] is not None and len(x[i]):
                 if save_vid or save_crop or show_vid:
                     # draw boxes for untracked objects
                     x[i][:, :4] = scale_coords(im.shape[2:], x[i][:, :4], im0.shape).round()
