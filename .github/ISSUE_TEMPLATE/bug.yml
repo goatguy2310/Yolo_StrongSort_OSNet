@@ -1,4 +1,4 @@
-name: Bug Report
+name: Bug
 # title: " "
 description: Report a Yolov5_StrongSORT_OSNet bug
 labels: [bug]
