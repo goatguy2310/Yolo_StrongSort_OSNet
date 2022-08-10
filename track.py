@@ -12,7 +12,10 @@ import sys
 import numpy as np
 from pathlib import Path
 import torch
+import torch.nn as nn
 import torch.backends.cudnn as cudnn
+import torchvision
+from torchvision import datasets, transforms, models
 from numpy import random
 
 
@@ -60,6 +63,7 @@ def run(
         save_vid=False,  # save confidences in --save-txt labels
         nosave=False,  # do not save images/videos
         classes=None,  # filter by class: --class 0, or --class 0 2 3
+        classesnotrack=None, # filter out classes that don't need to be tracked: --classesnotrack 0, or --classesnotrack 0 2 3
         agnostic_nms=False,  # class-agnostic NMS
         augment=False,  # augmented inference
         visualize=False,  # visualize features
@@ -142,9 +146,11 @@ def run(
     colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
 
     # Run tracking
-    dt, seen = [0.0, 0.0, 0.0, 0.0], 0
+    dt, seen, frame_cnt = [0.0, 0.0, 0.0, 0.0], 0, 0
+    start_time = time_sync()
     curr_frames, prev_frames = [None] * nr_sources, [None] * nr_sources
     for frame_idx, (path, im, im0s, vid_cap) in enumerate(dataset):
+        frame_cnt += 1
         s = ''
         t1 = time_synchronized()
         im = torch.from_numpy(im).to(device)
@@ -164,6 +170,14 @@ def run(
         # Apply NMS
         pred = non_max_suppression(pred[0], conf_thres, iou_thres, classes, agnostic_nms)
         dt[2] += time_synchronized() - t3
+        
+        # Filtering out classes that don't need to be tracked
+        x = []
+        if classesnotrack is not None:
+            for i, p in enumerate(pred):
+              trackingclasses = ~(p[:, 5:6] == torch.tensor(classesnotrack, device=p.device)).any(1)
+              x.append(p[~trackingclasses])
+              pred[i] = p[trackingclasses]
         
         # Process detections
         for i, det in enumerate(pred):  # detections per image
@@ -248,6 +262,19 @@ def run(
             else:
                 strongsort_list[i].increment_ages()
                 print('No detections')
+                
+            if len(x) > 0 and x[i] is not None and len(x[i]):
+                if save_vid or save_crop or show_vid:
+                    # draw boxes for untracked objects
+                    x[i][:, :4] = scale_coords(im.shape[2:], x[i][:, :4], im0.shape).round()
+                    for j, (x1, y1, x2, y2, conf, cls) in enumerate(x[i]):
+                        bboxes = [x1, y1, x2, y2]
+                        c = int(cls)  # integer class
+                        label = None if hide_labels else (f'Object: {names[c]}')
+                        annotator.box_label(bboxes, label, color=colors(c, True))
+                        if save_crop:
+                            txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
+                            save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{p.stem}.jpg', BGR=True)
 
             # Stream results
             if show_vid:
@@ -271,10 +298,15 @@ def run(
                 vid_writer[i].write(im0)
 
             prev_frames[i] = curr_frames[i]
+            
+        t6 = time_sync()
+        print(f'Total time: {t6 - t1:.3f}s, {(1 / (t6 - t1)):.3f} fps')
 
     # Print results
     t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
+    avg = (time_sync() - start_time) / frame_cnt # average time per frame
     print(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS, %.1fms strong sort update per image at shape {(1, 3, *imgsz)}' % t)
+    print(f'Average time: {avg:.3f}s, {(1 / avg):.3f} fps')
     if save_txt or save_vid:
         s = f"\n{len(list(save_dir.glob('tracks/*.txt')))} tracks saved to {save_dir / 'tracks'}" if save_txt else ''
         print(f"Results saved to {colorstr('bold', save_dir)}{s}")
@@ -301,6 +333,7 @@ def parse_opt():
     parser.add_argument('--nosave', action='store_true', help='do not save images/videos')
     # class 0 is person, 1 is bycicle, 2 is car... 79 is oven
     parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --classes 0, or --classes 0 2 3')
+    parser.add_argument('--classesnotrack', nargs='+', type=int, help='filter out classes that don\'t need to be tracked: --classesnotrack 0, or --classesnotrack 0 2 3')
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
     parser.add_argument('--visualize', action='store_true', help='visualize features')
