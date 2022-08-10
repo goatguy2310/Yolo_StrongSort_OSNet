@@ -131,6 +131,7 @@ def run(
             StrongSORT(
                 strong_sort_weights,
                 device,
+                half,
                 max_dist=cfg.STRONGSORT.MAX_DIST,
                 max_iou_distance=cfg.STRONGSORT.MAX_IOU_DISTANCE,
                 max_age=cfg.STRONGSORT.MAX_AGE,
@@ -141,6 +142,7 @@ def run(
 
             )
         )
+        strongsort_list[i].model.warmup()
     outputs = [None] * nr_sources
 
     # Run tracking
