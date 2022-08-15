@@ -147,7 +147,7 @@ def run(
 
     # Run tracking
     dt, seen, frame_cnt = [0.0, 0.0, 0.0, 0.0], 0, 0
-    start_time = time_sync()
+    start_time = time_synchronized()
     curr_frames, prev_frames = [None] * nr_sources, [None] * nr_sources
     for frame_idx, (path, im, im0s, vid_cap) in enumerate(dataset):
         frame_cnt += 1
