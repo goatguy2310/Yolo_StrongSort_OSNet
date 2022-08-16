@@ -268,10 +268,10 @@ def run(
                     # draw boxes for untracked objects
                     x[i][:, :4] = scale_coords(im.shape[2:], x[i][:, :4], im0.shape).round()
                     for j, (x1, y1, x2, y2, conf, cls) in enumerate(x[i]):
+                        c = int(cls)
                         bboxes = [x1, y1, x2, y2]
-                        c = int(cls)  # integer class
                         label = None if hide_labels else (f'Object: {names[c]}')
-                        annotator.box_label(bboxes, label, color=colors(c, True))
+                        plot_one_box(bboxes, im0, label=label, color=colors[int(cls)], line_thickness=2)
                         if save_crop:
                             txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
                             save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{p.stem}.jpg', BGR=True)
@@ -299,12 +299,12 @@ def run(
 
             prev_frames[i] = curr_frames[i]
             
-        t6 = time_sync()
+        t6 = time_synchronized()
         print(f'Total time: {t6 - t1:.3f}s, {(1 / (t6 - t1)):.3f} fps')
 
     # Print results
     t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
-    avg = (time_sync() - start_time) / frame_cnt # average time per frame
+    avg = (time_synchronized() - start_time) / frame_cnt # average time per frame
     print(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS, %.1fms strong sort update per image at shape {(1, 3, *imgsz)}' % t)
     print(f'Average time: {avg:.3f}s, {(1 / avg):.3f} fps')
     if save_txt or save_vid:
