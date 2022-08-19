@@ -34,9 +34,9 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from yolov7.models.experimental import attempt_load
 from yolov7.utils.datasets import LoadImages, LoadStreams
-from yolov7.utils.general import (check_img_size, non_max_suppression, scale_coords, check_requirements, cv2,
-                                  check_imshow, xyxy2xywh, increment_path, strip_optimizer, colorstr, check_file)
-from yolov7.utils.torch_utils import select_device, time_synchronized
+from yolov7.utils.general import (check_img_size, non_max_suppression, apply_classifier, scale_coords, check_requirements, cv2,
+                                  check_imshow, xyxy2xywh, xywh2xyxy, increment_path, strip_optimizer, colorstr, check_file)
+from yolov7.utils.torch_utils import select_device, load_classifier, time_synchronized
 from yolov7.utils.plots import plot_one_box
 from strong_sort.utils.parser import get_config
 from strong_sort.strong_sort import StrongSORT
@@ -44,12 +44,44 @@ from strong_sort.strong_sort import StrongSORT
 
 VID_FORMATS = 'asf', 'avi', 'gif', 'm4v', 'mkv', 'mov', 'mp4', 'mpeg', 'mpg', 'ts', 'wmv'  # include video suffixes
 
+def classify(x, model, img, im0):
+    # applies a second stage classifier to yolo outputs
+    im0 = [im0] if isinstance(im0, np.ndarray) else im0
+    for i, d in enumerate(x):  # per image
+        if d is not None and len(d):
+            d = d.clone()
+
+            # Rescale boxes from img_size to im0 size
+            scale_coords(img.shape[2:], d[:, :4], im0[i].shape)
+
+            # Classes
+            pred_cls1 = d[:, 5].long()
+            ims = []
+            for j, a in enumerate(d):  # per item
+                cutout = im0[i][int(a[1]):int(a[3]), int(a[0]):int(a[2])]
+                im = cv2.resize(cutout, (416, 416))  # BGR
+                cv2.imwrite('test%i.jpg' % j, im)
+
+                im = im[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
+                im = np.ascontiguousarray(im, dtype=np.float32)  # uint8 to float32
+                im /= 255.0  # 0 - 255 to 0.0 - 1.0
+                ims.append(im)
+
+            pred_cls2 = model(torch.Tensor(np.array(ims)).to(d.device)).argmax(1)  # classifier prediction
+            # x[i] = x[i][pred_cls1 == pred_cls2]  # retain matching class detections
+            real = [2, 3, 5, 6]
+            for k, j in enumerate(x[i]):
+              j[-1] = pred_cls2[k] = real[pred_cls2[k]]
+            print('\nPRED:', pred_cls2)
+    return x
 
 @torch.no_grad()
 def run(
         source='0',
         yolo_weights=WEIGHTS / 'yolov5m.pt',  # model.pt path(s),
         strong_sort_weights=WEIGHTS / 'osnet_x0_25_msmt17.pt',  # model.pt path,
+        classify_weights=None, # second stage classifier model.pt path,
+        classify_name=None, # classifier model's name
         config_strongsort=ROOT / 'strong_sort/configs/strong_sort.yaml',
         imgsz=(640, 640),  # inference size (height, width)
         conf_thres=0.25,  # confidence threshold
@@ -107,6 +139,13 @@ def run(
     stride = model.stride.max()  # model stride
     imgsz = check_img_size(imgsz[0], s=stride.cpu().numpy())  # check image size
 
+    if classify_weights is not None and classify_name is not None:
+        modelc = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.DEFAULT)
+        modelc.classifier[-1] = nn.Linear(1280, 4)
+        modelc.to(device)
+        modelc.load_state_dict(torch.load(str(classify_weights), map_location=device))
+        modelc.eval()
+
     # Dataloader
     if webcam:
         show_vid = check_imshow()
@@ -146,7 +185,7 @@ def run(
     colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
 
     # Run tracking
-    dt, seen, frame_cnt = [0.0, 0.0, 0.0, 0.0], 0, 0
+    dt, seen, frame_cnt = [0.0, 0.0, 0.0, 0.0, 0.0], 0, 0
     start_time = time_synchronized()
     curr_frames, prev_frames = [None] * nr_sources, [None] * nr_sources
     for frame_idx, (path, im, im0s, vid_cap) in enumerate(dataset):
@@ -178,7 +217,13 @@ def run(
               trackingclasses = ~(p[:, 5:6] == torch.tensor(classesnotrack, device=p.device)).any(1)
               x.append(p[~trackingclasses])
               pred[i] = p[trackingclasses]
-        
+
+        # Applying second stage classifier
+        if classify_weights is not None and classify_name is not None:
+            t4 = time_synchronized()
+            pred = classify(pred, modelc, im, im0s)
+            dt[3] += time_synchronized() - t4
+
         # Process detections
         for i, det in enumerate(pred):  # detections per image
             seen += 1
@@ -226,7 +271,7 @@ def run(
                 t4 = time_synchronized()
                 outputs[i] = strongsort_list[i].update(xywhs.cpu(), confs.cpu(), clss.cpu(), im0)
                 t5 = time_synchronized()
-                dt[3] += t5 - t4
+                dt[4] += t5 - t4
 
                 # draw boxes for visualization
                 if len(outputs[i]) > 0:
@@ -257,7 +302,7 @@ def run(
                                 txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
                                 save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
 
-                print(f'{s}Done. YOLO:({t3 - t2:.3f}s), StrongSORT:({t5 - t4:.3f}s)')
+                print(f'{s}Done. YOLO:({t3 - t2:.3f}s), StrongSORT:({t5 - t4:.3f}s), Classifier:({dt[3]:.3f}s)')
 
             else:
                 strongsort_list[i].increment_ages()
@@ -304,8 +349,9 @@ def run(
 
     # Print results
     t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
+    print(t)
     avg = (time_synchronized() - start_time) / frame_cnt # average time per frame
-    print(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS, %.1fms strong sort update per image at shape {(1, 3, *imgsz)}' % t)
+    print(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS, %.1fms second stage classifier, %.1fms strong sort update per image at shape {(1, 3, *imgsz)}' % t)
     print(f'Average time: {avg:.3f}s, {(1 / avg):.3f} fps')
     if save_txt or save_vid:
         s = f"\n{len(list(save_dir.glob('tracks/*.txt')))} tracks saved to {save_dir / 'tracks'}" if save_txt else ''
@@ -318,6 +364,8 @@ def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--yolo-weights', nargs='+', type=str, default=WEIGHTS / 'yolov7.pt', help='model.pt path(s)')
     parser.add_argument('--strong-sort-weights', type=str, default=WEIGHTS / 'osnet_x0_25_msmt17.pt')
+    parser.add_argument('--classify-weights', type=str, default=None, help='second stage classifier model.pt path')
+    parser.add_argument('--classify-name', type=str, default=None, help='second stage classifier\'s name')
     parser.add_argument('--config-strongsort', type=str, default='strong_sort/configs/strong_sort.yaml')
     parser.add_argument('--source', type=str, default='0', help='file/dir/URL/glob, 0 for webcam')  
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
