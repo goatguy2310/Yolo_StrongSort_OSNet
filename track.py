@@ -35,7 +35,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 from yolov7.models.experimental import attempt_load
 from yolov7.utils.datasets import LoadImages, LoadStreams
 from yolov7.utils.general import (check_img_size, non_max_suppression, apply_classifier, scale_coords, check_requirements, cv2,
-                                  check_imshow, xyxy2xywh, xywh2xyxy, increment_path, strip_optimizer, colorstr, check_file)
+                                  check_imshow, xyxy2xywh, xywh2xyxy, box_iou, increment_path, strip_optimizer, colorstr, check_file)
 from yolov7.utils.torch_utils import select_device, load_classifier, time_synchronized
 from yolov7.utils.plots import plot_one_box
 from strong_sort.utils.parser import get_config
@@ -82,6 +82,11 @@ def run(
         strong_sort_weights=WEIGHTS / 'osnet_x0_25_msmt17.pt',  # model.pt path,
         classify_weights=None, # second stage classifier model.pt path,
         classify_name=None, # classifier model's name
+        fall_thres=30, # threshold for fall detection
+        heartatt_thres=100, # threshold for heart attack detection
+        heartatt_max_thres=150, # maximum frame threshold for heart attack detection
+        lying_thres=150, # frame threshold for lying detection
+        lying_iou_thres=0.5, # iou between bed and sofa threshold for lying detection
         config_strongsort=ROOT / 'strong_sort/configs/strong_sort.yaml',
         imgsz=(640, 640),  # inference size (height, width)
         conf_thres=0.25,  # confidence threshold
@@ -145,6 +150,29 @@ def run(
         modelc.to(device)
         modelc.load_state_dict(torch.load(str(classify_weights), map_location=device))
         modelc.eval()
+
+    # Stable pose life cycle
+    # |Stable lb1, stab = lb1, state = stable| -> |First lb2 detection, stab = -1, state = unstable| -> |After x frames and y same lb2 labels, stab = lb2, state = stable|
+    #                                               |                                                           |
+    #                        |More than z detection != label, stab = -1, state = unstable| <---------------------
+    #
+    
+
+    st = [-1] * 100 # Stable states of objects
+    lst = [[-1, -1]] * 100 # Last state of stable (cls, framecnt (-1 = never))
+    ft = [[]] * 100 # Last 300 frames of whether a person is faint or not
+    stab_q = {} # Class queue of ids
+    frame_thres, stable_thres, other_thres = 30, 15, 5
+    fall_thres = int(fall_thres)
+    heartatt_thres = int(heartatt_thres)
+    heartatt_max_thres = int(heartatt_max_thres)
+    lying_thres = int(lying_thres)
+    lying_iou_thres = float(lying_iou_thres)
+    print('fall_thres: ', fall_thres)
+    print('heartatt_thres: ', heartatt_thres)
+    print('heartatt_max_thres: ', heartatt_max_thres)
+    print('lying_thres: ', lying_thres)
+    print('lying iou_thres: ', lying_iou_thres)
 
     # Dataloader
     if webcam:
@@ -254,14 +282,10 @@ def run(
             if cfg.STRONGSORT.ECC:  # camera motion compensation
                 strongsort_list[i].tracker.camera_update(prev_frames[i], curr_frames[i])
 
+            x[i][:, :4] = scale_coords(im.shape[2:], x[i][:, :4], im0.shape).round()
             if det is not None and len(det):
                 # Rescale boxes from img_size to im0 size
                 det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
-
-                # Print results
-                for c in det[:, -1].unique():
-                    n = (det[:, -1] == c).sum()  # detections per class
-                    s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
                 xywhs = xyxy2xywh(det[:, 0:4])
                 confs = det[:, 4]
@@ -273,13 +297,127 @@ def run(
                 t5 = time_synchronized()
                 dt[4] += t5 - t4
 
+                # processing stableness of existing tracks
+                de = {}
+                sbboxes = {}
+                for j in outputs[i]:
+                    de[int(j[4])] = int(j[5])
+                    sbboxes[int(j[4])] = j[0:4]
+                print(de)
+
+                for j in dict(stab_q):
+                    if j in de:
+                        targ = de[j]
+                        stab_q[j].append(targ)
+                    else:
+                        stab_q[j].append(-1)
+                    if len(stab_q[j]) > heartatt_max_thres: stab_q[j].pop(0)
+
+                    ok = False
+                    stab = 0
+                    oth = 0
+                    for it, k in enumerate(reversed(stab_q[j])):
+                        if it >= frame_thres: break
+                        if k != -1:
+                            ok = True
+
+                        if k == targ:
+                            stab += 1
+                            if stab >= stable_thres:
+                                break
+                        elif k != -1 and k != targ:
+                            oth += 1
+                            if oth >= other_thres:
+                                stab = -1
+                                break
+                    
+                    print(lst[j])
+                    if not ok and len(stab_q[j]) >= frame_thres: 
+                        stab_q.pop(j, None)
+                        st[j] = -1
+                        lst[j] = [-1, -1]
+                        continue
+                    
+                    if stab >= stable_thres: 
+                        st[j] = targ
+                    else:
+                        if st[j] != -1: lst[j] = [st[j], 0]
+                        if lst[j][1] != -1: lst[j][1] += 1
+                        st[j] = -1
+
+                    # Checking if patient is lying
+                    if st[j] == 3 and j in sbboxes:
+                        ok = False
+                        for k in x[i]:
+                            if k[5] == 0 or k[5] == 5:
+                                box1 = k[:4].cpu().numpy().astype(np.int32)
+                                box2 = sbboxes[j]
+                                print(box1, box2)
+                                b1_x1, b1_y1, b1_x2, b1_y2 = box1[0], box1[1], box1[2], box1[3]
+                                b2_x1, b2_y1, b2_x2, b2_y2 = box2[0], box2[1], box2[2], box2[3]
+
+                                # Intersection area
+                                a = min(b1_x2, b2_x2) - max(b1_x1, b2_x1)
+                                if a < 0: a = 0
+                                b = min(b1_y2, b2_y2) - max(b1_y1, b2_y1)
+                                if b < 0: b = 0
+                                inter = a * b
+
+                                # Union Area
+                                # w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1
+                                w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1
+                                # union = w1 * h1 + w2 * h2 - inter
+
+                                iou = inter / (w2 * h2)
+                                print('MAYBE FAINT: ', iou)
+                                if iou > lying_iou_thres:
+                                    ok = True
+                        if not ok: ft[j].append(1)
+                        else: ft[j].append(0)
+                        if len(ft[j]) > lying_thres: ft[j].pop(0)
+                        print(sum(ft[j]), lying_thres * 95 / 100)
+                        if sum(ft[j]) >= lying_thres * 95 / 100:
+                            print('HUMAN FAINT')
+                            with open('./lie.txt', 'a') as f:
+                                f.write(txt_path + '\n')
+
+                    # Checking if patient is falling
+                    if st[j] == 3 and lst[j][0] == 6 and lst[j][1] <= fall_thres:
+                        print('HUMAN HAS FALLEN')
+                        with open('./fall.txt', 'a') as f:
+                            f.write(txt_path + '\n')
+                    
+                    # Checking if patient is having a heart attack
+                    heart = 0
+                    for k in reversed(stab_q[j]):
+                        if k == 2: heart += 1
+                        if heart >= heartatt_thres:
+                            print('HUMAN IS HAVING A HEART ATTACK')
+                            with open('./heart.txt', 'a') as f:
+                                f.write(txt_path + '\n')
+                            break
+
+                # Print results
+                pp = ''
+                for j in outputs[i]:
+                    pp += f"{int(j[4])} {names[int(j[5])]} ({'last stable: ' + str(lst[int(j[4])][1]) if st[int(j[4])] == -1 else 'stable'}), "  # add to string
+                s += pp
+                with open(txt_path + '_st.txt', 'a') as f:
+                    f.write(pp + '\n')
+
                 # draw boxes for visualization
                 if len(outputs[i]) > 0:
                     for j, (output, conf) in enumerate(zip(outputs[i], confs)):
     
                         bboxes = output[0:4]
-                        id = output[4]
-                        cls = output[5]
+                        id = int(output[4])
+                        cls = int(output[5])
+
+                        # processing stableness of new track
+                        if id not in stab_q:
+                            stab_q[id] = [cls]
+                            st[id] = -1
+                            lst[id] = [cls, -1]
 
                         if save_txt:
                             # to MOT format
@@ -295,8 +433,9 @@ def run(
                         if save_vid or save_crop or show_vid:  # Add bbox to image
                             c = int(cls)  # integer class
                             id = int(id)  # integer id
-                            label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
-                                (f'{id} {conf:.2f}' if hide_class else f'{id} {names[c]} {conf:.2f}'))
+                            label = None if hide_labels else (f"{id} ({'last stable: ' + str(lst[id][1]) if st[id] == -1 else 'stable'}) {names[c]}" if hide_conf else \
+                                (f"{id} ({'last stable: ' + str(lst[id][1]) if st[id] == -1 else 'stable'}) {conf:.2f}" if hide_class else \
+                                f"{id} ({'last stable: ' + str(lst[id][1]) if st[id] == -1 else 'stable'}) {names[c]} {conf:.2f}"))
                             plot_one_box(bboxes, im0, label=label, color=colors[int(cls)], line_thickness=2)
                             if save_crop:
                                 txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
@@ -311,7 +450,6 @@ def run(
             if len(x) > 0 and x[i] is not None and len(x[i]):
                 if save_vid or save_crop or show_vid:
                     # draw boxes for untracked objects
-                    x[i][:, :4] = scale_coords(im.shape[2:], x[i][:, :4], im0.shape).round()
                     for j, (x1, y1, x2, y2, conf, cls) in enumerate(x[i]):
                         c = int(cls)
                         bboxes = [x1, y1, x2, y2]
@@ -366,6 +504,11 @@ def parse_opt():
     parser.add_argument('--strong-sort-weights', type=str, default=WEIGHTS / 'osnet_x0_25_msmt17.pt')
     parser.add_argument('--classify-weights', type=str, default=None, help='second stage classifier model.pt path')
     parser.add_argument('--classify-name', type=str, default=None, help='second stage classifier\'s name')
+    parser.add_argument('--fall-thres', type=str, default=30, help='fall threshold')
+    parser.add_argument('--heartatt-thres', type=str, default=100, help='heart attack threshold')
+    parser.add_argument('--heartatt-max-thres', type=str, default=150, help='heart attack max frame threshold')
+    parser.add_argument('--lying-thres', type=str, default=150, help='lying threshold')
+    parser.add_argument('--lying-iou-thres', type=str, default=0.5, help='lying iou with bed or sofa threshold')
     parser.add_argument('--config-strongsort', type=str, default='strong_sort/configs/strong_sort.yaml')
     parser.add_argument('--source', type=str, default='0', help='file/dir/URL/glob, 0 for webcam')  
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')

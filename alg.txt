@@ -1,0 +1,82 @@
+F (Current frame)
+T (Tracking objects)
+O (List of detected objects and their bboxes, classes and ids)
+
+We propose a method to determine whether a person's pose is in a stable state in a sequence of frames. Additionally, this algorithm can also distinguish if a person is in a transition between different poses or a steady posture.
+
+Firstly, the frame F extracted from the video stream is put into the YOLOv5 model to detect objects in the image. Secondly, the detections are put into the StrongSORT algorithm to track and re-id the objects found previously and output into O.
+
+We now loop through all T_i where T_i is the ith object that are previously tracked. If T_i's ID appears in O, we set T_i's current class as the class detected in O, otherwise we set it as none. We then add it to a list of classes detected for this track including in past frames. Then, we remove the track if it does not appear in the last 30 frames including F. Finally, we perform the stable check. 
+
+If T_i is already stable, we will check if T_i is still stable or not whether T_i is detected in F or not. We can know that T_i is still stable by determining if the amount of frames that T_i is detected and has the same class as the determined class in the past 30 frames is more than half of that, and the amount of frames that T_i is detected and has the different class is less than 5. Otherwise, it is saved as unstable. Aside from that, we also save that as the last stable frame and the class for later use.
+
+If T_i is not already stable, we will do the process almost the same as above. Unlike before, T_i has to be detected in O because instead of checking with the stable class, we will check with the class detected in the current frame.
+
+For the new objects detected in O which are not already in T, we also add them into T and set them as unstable.
+
+1. Stable Algorithm
+
+Input: F, T
+Output: O, T.stable, T.laststable
+
+O = strongsort(YOLOv5(F))
+for all T_i do
+    if T_i.id is in O then
+        T_i.currentcls = O[T_i.id].cls
+    else then
+        T_i.currentcls = none
+    T_i.pastcls.add(T_i.currentcls) // adding current cls to T_i.cls list
+    if in last 30 frames T_i.cls = none then // removing this track if it was not in the last 30 frames
+        remove T_i
+
+    if T_i.stable = true // checking if it is still stable
+        if in last 30 frames T_i.cls = T_i.stablecls count > 15 and T_i.cls != T_i.stablecls < 5 then
+            T_i.stablecls = T_i.currentcls // is stable
+        else then
+            T_i.stablecls = none // not stable
+            T_i.laststable.cls = T_i.stablecls // save this as the last stable state
+            T_i.laststable.time.accumulate()
+    else if T_i.currentcls != none then // checking if it is stable now with the current class (stablecls -> currentcls)
+        if in last 30 frames T_i.cls = T_i.currentcls count > 15 and T_i.cls != T_i.currentcls < 5 then
+            ...
+
+for all obj in O not in T do
+    T.add(obj)
+
+2. Lying on strange objects
+
+This case can be easily recognized by computing the IoU between a lying person that is confirmed to be in a stable state and beds or sofas. After a certain number of frames, our system will mark this as an emergency.
+
+Input: O, T
+Output: Whether the person is in danger
+
+for every person P_i with P_i.stablecls = lie in T do
+    lying_strange_obj = false
+    for every bed and sofa B_i in O do
+        if IoU(P_i, B_i) > iou_thres then
+            P_i.lying_strange_obj = true // person is lying on one of them
+    if more than last lying_thres frames P_i.lying_strange_obj = true:
+        danger = true
+
+3. Falling
+
+We can detect this by checking every person that are lying and stable with their last stable class is standing if the amount of frames between the two is smaller than a certain number. The process of finding the last stable class is described above.
+
+Input: O, T
+Output: Whether the person has fallen
+
+for every person P_i with P_i.stablecls = lie in T do
+    if P_i.laststable.cls = stand and P_i.laststable.time <= fall_thres then
+        danger = true
+
+4. Heart attack
+
+For this case, we quickly check if for the last certain amount of frames, a person has the chest holding posture for more than another certain amount of frames.
+
+Input: O, T
+
+for every person P_i in T do
+    chest_holding = 0
+    if P_i.cls = chest_holding in last 150 frames >= heartatt_thres then
+        danger = true
+    
