@@ -62,8 +62,7 @@ def classify(x, model, img, im0):
                 im = cv2.resize(cutout, (256, 256))  # BGR
                 cv2.imwrite('test%i.jpg' % j, im)
 
-                im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB) # BGR to RGB
-                im = cv2.transpose(im, (2, 0, 1)) # transpose to 3x256x256
+                im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB).transpose((2, 0, 1)) # BGR to RGB and transpose to 3x256x256
                 im = np.ascontiguousarray(im, dtype=np.float32)  # uint8 to float32
                 im /= 255.0  # 0 - 255 to 0.0 - 1.0
                 ims.append(im)
@@ -72,7 +71,6 @@ def classify(x, model, img, im0):
             real = [3.0, 4.0, 6.0, 7.0]
             for k, j in enumerate(x[i]):
               j[-1] = pred_cls2[k] = real[pred_cls2[k]]
-            print('\nPRED:', pred_cls2)
     return x
 
 @torch.no_grad()
