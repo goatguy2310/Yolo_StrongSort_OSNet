@@ -379,14 +379,15 @@ def run(
                             print('HUMAN FAINT')
                             with open('./lie.txt', 'a') as f:
                                 f.write(txt_path + '\n')
-                            with open(txt_path + '_lie.txt', 'a') as f:
-                                f.write(f'{sum(ft[j])} | Thres: {lying_thres}\n')
+                        with open(txt_path + '_lie.txt', 'a') as f:
+                            f.write(f'{sum(ft[j])} | Thres: {lying_thres}\n')
 
                     # Checking if patient is falling
-                    if st[j] == 3 and lst[j][0] == 6 and lst[j][1] <= fall_thres:
-                        print('HUMAN HAS FALLEN')
-                        with open('./fall.txt', 'a') as f:
-                            f.write(txt_path + '\n')
+                    if st[j] == 3 and lst[j][0] == 6:
+                        if lst[j][1] <= fall_thres:
+                            print('HUMAN HAS FALLEN')
+                            with open('./fall.txt', 'a') as f:
+                                f.write(txt_path + '\n')
                         with open(txt_path + '_fall.txt', 'a') as f:
                             f.write(f'{lst[j][1]} | Thres: {fall_thres}\n')
                     
