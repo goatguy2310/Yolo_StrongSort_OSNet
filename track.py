@@ -59,17 +59,17 @@ def classify(x, model, img, im0):
             ims = []
             for j, a in enumerate(d):  # per item
                 cutout = im0[i][int(a[1]):int(a[3]), int(a[0]):int(a[2])]
-                im = cv2.resize(cutout, (416, 416))  # BGR
+                im = cv2.resize(cutout, (256, 256))  # BGR
                 cv2.imwrite('test%i.jpg' % j, im)
 
-                im = im[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
+                im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB) # BGR to RGB
+                im = cv2.transpose(im, (2, 0, 1)) # transpose to 3x256x256
                 im = np.ascontiguousarray(im, dtype=np.float32)  # uint8 to float32
                 im /= 255.0  # 0 - 255 to 0.0 - 1.0
                 ims.append(im)
 
             pred_cls2 = model(torch.Tensor(np.array(ims)).to(d.device)).argmax(1)  # classifier prediction
-            # x[i] = x[i][pred_cls1 == pred_cls2]  # retain matching class detections
-            real = [2, 3, 5, 6]
+            real = [3.0, 4.0, 6.0, 7.0]
             for k, j in enumerate(x[i]):
               j[-1] = pred_cls2[k] = real[pred_cls2[k]]
             print('\nPRED:', pred_cls2)
@@ -369,23 +369,28 @@ def run(
                                 # union = w1 * h1 + w2 * h2 - inter
 
                                 iou = inter / (w2 * h2)
-                                print('MAYBE FAINT: ', iou)
                                 if iou > lying_iou_thres:
+                                    print('MAYBE FAINT: ', iou)
+                                    with open(txt_path + '_lie.txt', 'a') as f:
+                                        f.write(f'MAYBE FAINT: {iou} | Thres: {lying_iou_thres}\n')
                                     ok = True
                         if not ok: ft[j].append(1)
                         else: ft[j].append(0)
                         if len(ft[j]) > lying_thres: ft[j].pop(0)
-                        print(sum(ft[j]), lying_thres * 95 / 100)
                         if sum(ft[j]) >= lying_thres * 95 / 100:
                             print('HUMAN FAINT')
                             with open('./lie.txt', 'a') as f:
                                 f.write(txt_path + '\n')
+                            with open(txt_path + '_lie.txt', 'a') as f:
+                                f.write(f'{sum(ft[j])} | Thres: {lying_thres}\n')
 
                     # Checking if patient is falling
                     if st[j] == 3 and lst[j][0] == 6 and lst[j][1] <= fall_thres:
                         print('HUMAN HAS FALLEN')
                         with open('./fall.txt', 'a') as f:
                             f.write(txt_path + '\n')
+                        with open(txt_path + '_fall.txt', 'a') as f:
+                            f.write(f'{lst[j][1]} | Thres: {fall_thres}\n')
                     
                     # Checking if patient is having a heart attack
                     heart = 0
@@ -395,6 +400,8 @@ def run(
                             print('HUMAN IS HAVING A HEART ATTACK')
                             with open('./heart.txt', 'a') as f:
                                 f.write(txt_path + '\n')
+                            with open(txt_path + '_heart.txt', 'a') as f:
+                                f.write(f'{heart} | Thres: {heartatt_thres}\n')
                             break
 
                 # Print results
