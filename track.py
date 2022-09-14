@@ -73,6 +73,34 @@ def classify(x, model, img, im0):
               j[-1] = pred_cls2[k] = real[pred_cls2[k]]
     return x
 
+def chesthugging_classify(x, model, img, im0):
+    # applies a second stage classifier to yolo outputs
+    im0 = [im0] if isinstance(im0, np.ndarray) else im0
+    for i, d in enumerate(x):  # per image
+        if d is not None and len(d):
+            d = d.clone()
+
+            # Rescale boxes from img_size to im0 size
+            scale_coords(img.shape[2:], d[:, :4], im0[i].shape)
+
+            # Classes
+            pred_cls1 = d[:, 5].long()
+            ims = []
+            for j, a in enumerate(d):  # per item
+                cutout = im0[i][int(a[1]):int(a[3]), int(a[0]):int(a[2])]
+                im = cv2.resize(cutout, (256, 256))  # BGR
+                cv2.imwrite('test%i.jpg' % j, im)
+
+                im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB).transpose((2, 0, 1)) # BGR to RGB and transpose to 3x256x256
+                im = np.ascontiguousarray(im, dtype=np.float32)  # uint8 to float32
+                im /= 255.0  # 0 - 255 to 0.0 - 1.0
+                ims.append(im)
+
+            pred_cls2 = model(torch.Tensor(np.array(ims)).to(d.device)).argmax(1)  # classifier prediction
+            for k, j in enumerate(x[i]):
+              if pred_cls2[k] == 0: j[-1] = 2.0
+    return x
+
 @torch.no_grad()
 def run(
         source='0',
@@ -80,6 +108,7 @@ def run(
         strong_sort_weights=WEIGHTS / 'osnet_x0_25_msmt17.pt',  # model.pt path,
         classify_weights=None, # second stage classifier model.pt path,
         classify_name=None, # classifier model's name
+        chesthugging_weights=None, # chest hugging classifier model.pth path,
         fall_thres=30, # threshold for fall detection
         heartatt_thres=100, # threshold for heart attack detection
         heartatt_max_thres=150, # maximum frame threshold for heart attack detection
@@ -144,10 +173,17 @@ def run(
 
     if classify_weights is not None and classify_name is not None:
         modelc = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.DEFAULT)
-        modelc.classifier[-1] = nn.Linear(1280, 4)
+        modelc.classifier[-1] = nn.Linear(1280, 3)
         modelc.to(device)
         modelc.load_state_dict(torch.load(str(classify_weights), map_location=device))
         modelc.eval()
+
+    if chesthugging_weights is not None:
+        modelh = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.DEFAULT)
+        modelh.classifier[-1] = nn.Linear(1280, 2)
+        modelh.to(device)
+        modelh.load_state_dict(torch.load(str(chesthugging_weights), map_location=device))
+        modelh.eval()
 
     # Stable pose life cycle
     # |Stable lb1, stab = lb1, state = stable| -> |First lb2 detection, stab = -1, state = unstable| -> |After x frames and y same lb2 labels, stab = lb2, state = stable|
@@ -248,6 +284,12 @@ def run(
         if classify_weights is not None and classify_name is not None:
             t4 = time_synchronized()
             pred = classify(pred, modelc, im, im0s)
+            dt[3] += time_synchronized() - t4
+
+        # Applying chest hugging classifier
+        if chesthugging_weights is not None:
+            t4 = time_synchronized()
+            pred = chesthugging_classify(pred, modelh, im, im0s)
             dt[3] += time_synchronized() - t4
 
         # Process detections
@@ -510,6 +552,7 @@ def parse_opt():
     parser.add_argument('--strong-sort-weights', type=str, default=WEIGHTS / 'osnet_x0_25_msmt17.pt')
     parser.add_argument('--classify-weights', type=str, default=None, help='second stage classifier model.pt path')
     parser.add_argument('--classify-name', type=str, default=None, help='second stage classifier\'s name')
+    parser.add_argument('--chesthugging-weights', type=str, default=None, help='chest hugging classifier model.pt path')
     parser.add_argument('--fall-thres', type=str, default=30, help='fall threshold')
     parser.add_argument('--heartatt-thres', type=str, default=100, help='heart attack threshold')
     parser.add_argument('--heartatt-max-thres', type=str, default=150, help='heart attack max frame threshold')
